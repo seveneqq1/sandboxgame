@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Falling Sand Engine</title>
+<style>
+  :root { --bg:#0B0F19; --glass:rgba(255,255,255,.06); --edge:rgba(255,255,255,.12); --text:#E6EAF5; --dim:#8B94AD; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text);
+    font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; align-items:center; gap:14px; padding:18px 12px 28px;
+    background:radial-gradient(900px 500px at 50% -10%,#18213a 0%,var(--bg) 70%); }
+  h1 { margin:0; font-size:20px; font-weight:650; letter-spacing:.02em; }
+  .glass { background:var(--glass); border:1px solid var(--edge); border-radius:14px;
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  /* Canvas stage: scales down on small screens, stays square */
+  #stage { position:relative; width:min(600px,94vw); aspect-ratio:1; border-radius:14px; overflow:hidden;
+    border:1px solid var(--edge); box-shadow:0 0 60px rgba(70,110,255,.12); touch-action:none; cursor:none; }
+  canvas { width:100%; height:100%; display:block; image-rendering:pixelated; touch-action:none; }
+  #brush { position:absolute; pointer-events:none; border:1.5px solid #fff; border-radius:50%;
+    transform:translate(-50%,-50%); opacity:0; mix-blend-mode:difference; }
+  #hud { position:absolute; top:8px; left:8px; padding:5px 10px; font:12px ui-monospace,Menlo,Consolas,monospace;
+    color:var(--text); pointer-events:none; }
+  #paused { position:absolute; top:8px; right:8px; padding:5px 10px; font-size:12px; color:#ffd479; display:none; pointer-events:none; }
+  #panel { width:min(600px,94vw); padding:12px; display:flex; flex-direction:column; gap:12px; }
+  #tools { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  #env { display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; }
+  #env label { display:flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; }
+  #env label b { width:48px; text-align:right; font-weight:500; color:var(--text); font-variant-numeric:tabular-nums; }
+  #env input { flex:1; min-width:0; }
+  .act.alt.on { border-color:#ffb347; box-shadow:0 0 14px rgba(255,179,71,.5); }
+  @media (max-width:520px){ #env { grid-template-columns:1fr; } }
+  .tool { --c:#fff; appearance:none; cursor:pointer; color:var(--text); background:rgba(255,255,255,.05);
+    border:1px solid var(--edge); border-radius:10px; padding:9px 2px 7px; font:inherit; font-size:12px;
+    display:flex; flex-direction:column; align-items:center; gap:5px; transition:box-shadow .15s,border-color .15s,transform .1s; }
+  .tool i { width:16px; height:16px; border-radius:50%; background:var(--c); box-shadow:0 0 8px var(--c); }
+  .tool small { color:var(--dim); font-size:10px; }
+  .tool:hover { transform:translateY(-1px); }
+  .tool.on { border-color:var(--c); box-shadow:0 0 0 1px var(--c),0 0 18px -2px var(--c); background:rgba(255,255,255,.1); }
+  .tool:focus-visible,.act:focus-visible { outline:2px solid #7aa2ff; outline-offset:2px; }
+  #row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  #row label { display:flex; align-items:center; gap:8px; flex:1; min-width:200px; color:var(--dim); }
+  input[type=range] { flex:1; accent-color:#6a8dff; }
+  #rv { width:32px; color:var(--text); text-align:right; font-variant-numeric:tabular-nums; }
+  .act { cursor:pointer; color:#fff; font:inherit; font-weight:600; padding:8px 16px; border-radius:10px;
+    border:1px solid rgba(122,162,255,.6); background:linear-gradient(180deg,#4a6bff,#3550d8);
+    box-shadow:0 0 16px rgba(74,107,255,.45); }
+  .act.alt { background:rgba(255,255,255,.07); border-color:var(--edge); box-shadow:none; }
+  .act:hover { filter:brightness(1.15); }
+  p.help { margin:0; color:var(--dim); font-size:12px; text-align:center; }
+  kbd { background:rgba(255,255,255,.1); border-radius:4px; padding:0 5px; }
+</style>
+</head>
+<body>
+<h1>Falling Sand Engine</h1>
+
+<div id="stage">
+  <canvas id="view" width="600" height="600"></canvas>
+  <div id="brush"></div>
+  <div id="hud" class="glass">FPS -- · Particles 0</div>
+  <div id="paused" class="glass">Paused</div>
+</div>
+
+<div id="panel" class="glass">
+  <div id="tools"></div>
+  <div id="env">
+    <label>Ambient <input id="amb" type="range" min="-30" max="150" value="20"><b id="ambv">20°C</b></label>
+    <label>Conductivity <input id="cond" type="range" min="0.2" max="2" step="0.1" value="1"><b id="condv">1.0×</b></label>
+    <label>Heater power <input id="htr" type="range" min="100" max="1000" step="50" value="500"><b id="htrv">500°C</b></label>
+    <label>Gravity <input id="grav" type="range" min="20" max="100" value="100"><b id="gravv">100%</b></label>
+  </div>
+  <div id="row">
+    <label>Brush radius <input id="size" type="range" min="1" max="8" value="3"><span id="rv">3 px</span></label>
+    <button class="act alt" id="heat">Heat view</button>
+    <button class="act alt" id="pause">Pause</button>
+    <button class="act" id="clear">Clear</button>
+  </div>
+  <p class="help"><kbd>1</kbd>–<kbd>8</kbd> pick element · <kbd>H</kbd> heat view · <kbd>C</kbd> clear · <kbd>Space</kbd> play/pause</p>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* =========================================================
+ * 1. CONSTANTS & STATE
+ * ========================================================= */
+const W = 150, H = 150, N = W * H, VIEW = 600;
+const EMPTY = 0, SAND = 1, WATER = 2, STONE = 3, FIRE = 4, ACID = 5, SMOKE = 6, STEAM = 7, ICE = 8, HEATER = 9;
+// Thermal material tables, indexed by element id.
+// K   = heat conductivity (max 0.24 keeps the explicit diffusion stable)
+// ENV = how fast the material relaxes toward the ambient temperature (air loses heat fastest)
+//                        air  sand  water stone fire  acid  smoke steam ice   heater
+const K   = new Float32Array([.03, .10, .18, .24, .15, .18, .04, .04, .20, .24]);
+const ENV = new Float32Array([.02, .002,.003,.002,.01, .003,.03, .03, .002, 0]);
+const BG = [11, 15, 25];
+
+// Element metadata for the toolbar: [id, name, glow color]
+const TOOLS = [
+  [SAND,  'Sand',   '#e6b85c'], [WATER, 'Water', '#2f8cff'], [FIRE,  'Fire',   '#ff7a1a'],
+  [ACID,  'Acid',   '#7dff3a'], [STONE, 'Stone', '#8a8f9c'], [-1,    'Eraser', '#ffffff'],
+  [ICE,   'Ice',    '#9fe6ff'], [HEATER, 'Heater', '#ff5a36']
+];
+
+// Cell state lives in flat typed arrays (fast, cache friendly).
+const type  = new Uint8Array(N);   // element id per cell
+const life  = new Uint8Array(N);   // remaining lifetime (fire / smoke)
+const vr    = new Uint8Array(N);   // per-cell random seed used for color noise
+// "Moved" lookup acts as the double buffer: any cell written during this tick is
+// flagged, so a particle can never be simulated twice (no double-stepping / fall-through).
+const moved = new Uint8Array(N);
+
+let frame = 0, paused = false, brushR = 3, current = SAND;
+// Per-cell temperature (°C). Double-buffered so heat diffusion is order independent.
+let temp = new Float32Array(N).fill(20), tn = new Float32Array(N).fill(20);
+// Tunable environment (bound to the sliders)
+let ambient = 20, cm = 1, heaterT = 500, grav = 1, heatView = false;
+
+/* =========================================================
+ * 2. HELPERS
+ * ========================================================= */
+const rnd  = Math.random;
+const rint = (a, b) => a + ((rnd() * (b - a + 1)) | 0);           // inclusive int
+const at   = (x, y) => (x < 0 || x >= W || y < 0 || y >= H) ? 255 : type[y * W + x]; // 255 = wall
+
+// Swap two cells completely and flag both as handled this tick.
+function swap(i, j) {
+  let t = type[i]; type[i] = type[j]; type[j] = t;
+  t = life[i]; life[i] = life[j]; life[j] = t;
+  t = vr[i];   vr[i]   = vr[j];   vr[j]   = t;
+  const f = temp[i]; temp[i] = temp[j]; temp[j] = f;   // heat travels with the matter
+  moved[i] = moved[j] = 1;
+}
+// Gas-like cells (empty/smoke) can be displaced by falling matter.
+const light = t => t === EMPTY || t === SMOKE || t === STEAM;
+
+function spawn(i, t) {
+  type[i] = t; vr[i] = rint(0, 255); moved[i] = 1;
+  life[i] = t === FIRE ? rint(25, 45) : t === SMOKE ? rint(15, 30) : 0;
+  temp[i] = t === FIRE ? 600 : t === SMOKE ? 90 : t === STEAM ? 105 : t === ICE ? -10 : t === HEATER ? heaterT : ambient;
+}
+
+/* =========================================================
+ * 3. PARTICLE RULES
+ * ========================================================= */
+
+// Powder: fall, slide diagonally, sink through water.
+function stepSand(x, y, i) {
+  const pass = t => light(t) || t === WATER;
+  if (pass(at(x, y + 1))) return swap(i, i + W);
+  const d = rnd() < .5 ? 1 : -1;                       // random left/right bias
+  if (pass(at(x + d, y + 1)) && pass(at(x + d, y))) return swap(i, i + W + d);
+  if (pass(at(x - d, y + 1)) && pass(at(x - d, y))) return swap(i, i + W - d);
+}
+
+// Liquid (water & acid): fall, slide, then disperse horizontally 1-2 cells.
+function stepLiquid(x, y, i, acid) {
+  if (acid) {                                          // corrode adjacent Stone / Sand
+    const nb = [i + 1, i - 1, i + W, i - W], nx = [x + 1, x - 1, x, x], ny = [y, y, y + 1, y - 1];
+    for (let k = 0; k < 4; k++) {
+      const t = at(nx[k], ny[k]);
+      if ((t === STONE || t === SAND) && rnd() < .3) {
+        type[nb[k]] = EMPTY; moved[nb[k]] = 1;         // target dissolves
+        spawn(i, SMOKE);                               // acid is consumed -> fumes
+        return;
+      }
+    }
+  }
+  const pass = t => light(t) || (acid && t === WATER); // acid is denser than water
+  if (pass(at(x, y + 1))) return swap(i, i + W);
+  const d = rnd() < .5 ? 1 : -1;
+  if (pass(at(x + d, y + 1))) return swap(i, i + W + d);
+  if (pass(at(x - d, y + 1))) return swap(i, i + W - d);
+  for (const dir of [d, -d]) {                         // horizontal flow
+    let far = 0;
+    const reach = rint(1, 2);
+    for (let s = 1; s <= reach && light(at(x + dir * s, y)); s++) far = s;
+    if (far) return swap(i, i + dir * far);
+  }
+}
+
+// Fire: rises with turbulence, burns out, boils water, ignites sand.
+function stepFire(x, y, i) {
+  if (--life[i] <= 0) {                                // end of life
+    if (rnd() < .35) spawn(i, SMOKE); else { type[i] = EMPTY; temp[i] = 120; }
+    moved[i] = 1; return;
+  }
+  const nb = [i + 1, i - 1, i + W, i - W], nx = [x + 1, x - 1, x, x], ny = [y, y, y + 1, y - 1];
+  for (let k = 0; k < 4; k++) {
+    const t = at(nx[k], ny[k]);
+    if (t === WATER) life[i] = life[i] > 4 ? life[i] - 4 : 1;            // water smothers flames; its heat does the boiling
+    if (t === SAND && rnd() < .06) spawn(nb[k], FIRE);                   // sand burns away
+  }
+  temp[i] = Math.max(temp[i], 350 + life[i] * 8);       // flames are a hot heat source
+  if (rnd() < .12) return;                             // flicker in place
+  const dx = rint(-1, 1);
+  if (at(x + dx, y - 1) === EMPTY) return swap(i, i + dx - W);
+  if (at(x - dx, y - 1) === EMPTY) return swap(i, i - dx - W);
+  if (rnd() < .3 && at(x + dx, y) === EMPTY) swap(i, i + dx);
+}
+
+// Smoke: drifts up, spreads sideways, fades.
+function stepSmoke(x, y, i) {
+  if (--life[i] <= 0) { type[i] = EMPTY; moved[i] = 1; return; }
+  const dx = rint(-1, 1);
+  if (at(x + dx, y - 1) === EMPTY) return swap(i, i + dx - W);
+  const s = rnd() < .5 ? rint(1, 2) : -rint(1, 2);
+  if (at(x + s, y) === EMPTY) swap(i, i + s);
+}
+
+// Steam: light gas that bubbles up through air AND liquids (so boiling works under water).
+function stepSteam(x, y, i) {
+  const up = t => t === EMPTY || t === SMOKE || t === WATER || t === ACID;
+  const dx = rint(-1, 1);
+  if (up(at(x + dx, y - 1))) return swap(i, i + dx - W);
+  if (up(at(x - dx, y - 1))) return swap(i, i - dx - W);
+  const s = rnd() < .5 ? 1 : -1, t = at(x + s, y);
+  if (t === EMPTY || (t === WATER && rnd() < .3)) swap(i, i + s);
+}
+
+// Heat pass: conduction between neighbours (energy conserving), relaxation to ambient, phase changes.
+function thermal() {
+  tn.set(temp);
+  const flow = (i, j) => {
+    const f = (temp[j] - temp[i]) * Math.min(.24, Math.min(K[type[i]], K[type[j]]) * cm);
+    tn[i] += f; tn[j] -= f;
+  };
+  for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i++) {
+    if (x < W - 1) flow(i, i + 1);
+    if (y < H - 1) flow(i, i + W);
+    tn[i] += (ambient - temp[i]) * ENV[type[i]];
+  }
+  const t0 = temp; temp = tn; tn = t0;
+  for (let i = 0; i < N; i++) {                         // phase changes
+    const t = type[i], T = temp[i];
+    if (t === HEATER) temp[i] = heaterT;
+    else if (t === WATER) {
+      if (T > 100 && rnd() < Math.min(1, (T - 100) * .03)) { type[i] = STEAM; temp[i] = 100; }   // boil (latent heat lost)
+      else if (T < -1 && rnd() < Math.min(1, -T * .05)) { type[i] = ICE; temp[i] = 0; }          // freeze
+    } else if (t === ICE) {
+      if (T > 1 && rnd() < Math.min(1, T * .05)) { type[i] = WATER; temp[i] = 1; }               // melt
+    } else if (t === STEAM) {
+      if (T < 95 && rnd() < .02) type[i] = WATER;                                                // condense
+      else if (i < W && rnd() < .3) type[i] = EMPTY;                                             // vents out the open top
+    }
+  }
+}
+
+/* =========================================================
+ * 4. SIMULATION TICK
+ * ========================================================= */
+function step() {
+  moved.fill(0);
+  const ltr = (frame & 1) === 0;                       // alternate sweep direction each frame
+  for (let y = H - 1; y >= 0; y--) {                   // bottom -> top so falling stacks resolve
+    for (let k = 0; k < W; k++) {
+      const x = ltr ? k : W - 1 - k, i = y * W + x, t = type[i];
+      if (t === EMPTY || t === STONE || t === ICE || t === HEATER || moved[i]) continue;
+      if ((t === SAND || t === WATER || t === ACID) && rnd() > grav) continue;   // gravity strength
+      switch (t) {
+        case SAND:  stepSand(x, y, i); break;
+        case WATER: stepLiquid(x, y, i, false); break;
+        case ACID:  stepLiquid(x, y, i, true); break;
+        case FIRE:  stepFire(x, y, i); break;
+        case SMOKE: stepSmoke(x, y, i); break;
+        case STEAM: stepSteam(x, y, i); break;
+      }
+    }
+  }
+  thermal();
+  frame++;
+}
+
+/* =========================================================
+ * 5. RENDERING (with bloom pass)
+ * ========================================================= */
+const view = document.getElementById('view'), ctx = view.getContext('2d');
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const simC = mk(W, H), simX = simC.getContext('2d'), simImg = simX.createImageData(W, H), pix = new Uint32Array(simImg.data.buffer);
+const glowC = mk(W, H), glowX = glowC.getContext('2d'), glowImg = glowX.createImageData(W, H), glow = new Uint32Array(glowImg.data.buffer);
+const bloomC = mk(30, 30), bloomX = bloomC.getContext('2d');   // tiny buffer = cheap soft blur when upscaled
+bloomX.imageSmoothingQuality = 'high';
+
+const pack = (r, g, b) => (255 << 24) | (b << 16) | (g << 8) | r;   // little-endian ABGR
+const clamp = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+const BGPIX = pack(...BG);
+
+// Hot solids shift toward orange as they heat up
+const hot = (r, g, b, T) => { const f = T > 250 ? Math.min(1, (T - 250) / 450) : 0;
+  return pack(clamp(r + (255 - r) * f), clamp(g + (90 - g) * f * .8), clamp(b + (20 - b) * f)); };
+
+function colorOf(t, v, l, T) {
+  const n = (v - 128) / 128;                           // -1..1 noise
+  switch (t) {
+    case SAND:  return hot(222 + n * 18, 180 + n * 22, 95 + n * 20, T);
+    case WATER: return pack(clamp(18 + n * 8), clamp(100 + n * 28 + (frame + v) % 24), clamp(215 + n * 20));
+    case STONE: return hot(78 + n * 14, 80 + n * 14, 90 + n * 14, T);
+    case FIRE:  { const f = l / 45; return pack(255, clamp(70 + 190 * f + n * 20), clamp(20 + 40 * f * f)); }
+    case ACID:  return pack(clamp(110 + n * 25), 255, clamp(55 + n * 30));
+    case ICE:   return pack(clamp(190 + n * 14), clamp(228 + n * 10), 255);
+    case HEATER: { const f = Math.min(1, heaterT / 1000); return pack(clamp(90 + 165 * f), clamp(40 + 70 * f), 30); }
+    case STEAM: { const a = .35, g = 200 + n * 15;
+      return pack(clamp(BG[0] + (g - BG[0]) * a), clamp(BG[1] + (g - BG[1]) * a), clamp(BG[2] + (g + 20 - BG[2]) * a)); }
+    case SMOKE: { const a = Math.min(.55, l / 30 * .6), g = 120 + n * 20;
+      return pack(clamp(BG[0] + (g - BG[0]) * a), clamp(BG[1] + (g - BG[1]) * a), clamp(BG[2] + (g - BG[2]) * a + 6)); }
+  }
+}
+
+// Heat-view palette: blue (cold) -> teal -> yellow -> orange -> white (very hot)
+const STOPS = [[-30, 30, 50, 220], [20, 30, 150, 170], [100, 230, 220, 40], [300, 240, 100, 20], [700, 255, 255, 230]];
+function heatColor(T) {
+  if (T <= STOPS[0][0]) return pack(STOPS[0][1], STOPS[0][2], STOPS[0][3]);
+  for (let k = 1; k < STOPS.length; k++) if (T <= STOPS[k][0]) {
+    const a = STOPS[k - 1], b = STOPS[k], f = (T - a[0]) / (b[0] - a[0]);
+    return pack(clamp(a[1] + (b[1] - a[1]) * f), clamp(a[2] + (b[2] - a[2]) * f), clamp(a[3] + (b[3] - a[3]) * f));
+  }
+  return pack(255, 255, 230);
+}
+const mix = (a, b, f) => pack(clamp((a & 255) * (1 - f) + (b & 255) * f),
+  clamp(((a >> 8) & 255) * (1 - f) + ((b >> 8) & 255) * f), clamp(((a >> 16) & 255) * (1 - f) + ((b >> 16) & 255) * f));
+
+let count = 0;
+function render() {
+  glow.fill(0); count = 0;
+  for (let i = 0; i < N; i++) {
+    const t = type[i];
+    const T = temp[i];
+    let c = t === EMPTY ? BGPIX : colorOf(t, vr[i], life[i], T);
+    if (t !== EMPTY) count++;
+    pix[i] = heatView ? mix(c, heatColor(T), .6) : c;
+    if (t === FIRE) glow[i] = pack(255, 130, 30);
+    else if (t === ACID) glow[i] = pack(90, 255, 50);
+    else if (t === HEATER || ((t === STONE || t === SAND) && T > 450)) {   // red-hot solids glow
+      const f = t === HEATER ? .8 : Math.min(1, (T - 450) / 400);
+      glow[i] = pack(255 * f, 100 * f, 15 * f);
+    }
+  }
+  simX.putImageData(simImg, 0, 0);
+  glowX.putImageData(glowImg, 0, 0);
+
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(simC, 0, 0, VIEW, VIEW);               // crisp upscaled particles
+
+  bloomX.clearRect(0, 0, 30, 30);
+  bloomX.drawImage(glowC, 0, 0, 30, 30);               // downsample emissive layer...
+  ctx.imageSmoothingEnabled = true;
+  ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .9;
+  ctx.drawImage(bloomC, 0, 0, VIEW, VIEW);             // ...upsample with smoothing = soft glow
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+
+/* =========================================================
+ * 6. INPUT: BRUSH, BRESENHAM LINES, POINTER, HOTKEYS
+ * ========================================================= */
+let down = false, px = -1, py = -1, hover = false;
+const stage = document.getElementById('stage'), brushEl = document.getElementById('brush');
+
+function stamp(cx, cy) {                               // paint a filled circle
+  const dens = [STONE, HEATER, ICE, -1].includes(current) ? 1 : .6;
+  for (let dy = -brushR; dy <= brushR; dy++) for (let dx = -brushR; dx <= brushR; dx++) {
+    if (dx * dx + dy * dy > brushR * brushR + 1) continue;
+    const x = cx + dx, y = cy + dy;
+    if (x < 0 || x >= W || y < 0 || y >= H || rnd() > dens) continue;
+    const i = y * W + x;
+    if (current === -1) { type[i] = EMPTY; life[i] = 0; temp[i] = ambient; }
+    else if (type[i] === EMPTY) spawn(i, current);
+  }
+}
+function line(x0, y0, x1, y1) {                        // Bresenham: no gaps on fast strokes
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    stamp(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+function toGrid(e) {
+  const r = view.getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) / r.width * W), Math.floor((e.clientY - r.top) / r.height * H), r];
+}
+function updateBrush(gx, gy, r) {                      // circular brush preview
+  const s = r.width / W, d = (brushR * 2 + 1) * s;
+  brushEl.style.width = brushEl.style.height = d + 'px';
+  brushEl.style.left = (gx + .5) * s + 'px'; brushEl.style.top = (gy + .5) * s + 'px';
+  brushEl.style.opacity = hover ? .8 : 0;
+}
+
+stage.addEventListener('pointerdown', e => {
+  e.preventDefault(); stage.setPointerCapture(e.pointerId);
+  const [gx, gy, r] = toGrid(e); down = true; hover = true; px = gx; py = gy;
+  line(gx, gy, gx, gy); updateBrush(gx, gy, r);
+});
+stage.addEventListener('pointermove', e => {
+  const [gx, gy, r] = toGrid(e); hover = true; updateBrush(gx, gy, r);
+  if (down) line(px, py, gx, gy);
+  px = gx; py = gy;
+});
+const up = () => { down = false; };
+stage.addEventListener('pointerup', up);
+stage.addEventListener('pointercancel', up);
+stage.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hover = false; brushEl.style.opacity = 0; } });
+stage.addEventListener('contextmenu', e => e.preventDefault());
+
+/* =========================================================
+ * 7. UI WIRING
+ * ========================================================= */
+const toolsEl = document.getElementById('tools'), toolBtns = [];
+TOOLS.forEach(([id, name, col], k) => {
+  const b = document.createElement('button');
+  b.className = 'tool'; b.style.setProperty('--c', col);
+  b.innerHTML = `<i></i>${name}<small>${k + 1}</small>`;
+  b.onclick = () => { select(k); b.blur(); };
+  toolsEl.appendChild(b); toolBtns.push(b);
+});
+function select(k) { current = TOOLS[k][0]; toolBtns.forEach((b, j) => b.classList.toggle('on', j === k)); }
+select(0);
+
+const sizeEl = document.getElementById('size'), rv = document.getElementById('rv');
+sizeEl.oninput = () => { brushR = +sizeEl.value; rv.textContent = brushR + ' px'; if (px >= 0) updateBrush(px, py, view.getBoundingClientRect()); };
+
+// Environment sliders
+const bind = (id, fmt, apply) => { const el = document.getElementById(id), out = document.getElementById(id + 'v');
+  el.oninput = () => { apply(+el.value); out.textContent = fmt(+el.value); }; };
+bind('amb',  v => v + '°C', v => ambient = v);
+bind('cond', v => v.toFixed(1) + '×', v => cm = v);
+bind('htr',  v => v + '°C', v => heaterT = v);
+bind('grav', v => v + '%', v => grav = v / 100);
+const heatBtn = document.getElementById('heat');
+function toggleHeat() { heatView = !heatView; heatBtn.classList.toggle('on', heatView); }
+heatBtn.onclick = () => { toggleHeat(); heatBtn.blur(); };
+
+const pauseBtn = document.getElementById('pause'), pausedTag = document.getElementById('paused');
+function togglePause() { paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; pausedTag.style.display = paused ? 'block' : 'none'; }
+function clearAll() { type.fill(0); life.fill(0); vr.fill(0); temp.fill(ambient); }
+pauseBtn.onclick = () => { togglePause(); pauseBtn.blur(); };
+document.getElementById('clear').onclick = e => { clearAll(); e.target.blur(); };
+
+addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key >= '1' && e.key <= '8') select(+e.key - 1);
+  else if (e.key === 'c' || e.key === 'C') clearAll();
+  else if (e.key === 'h' || e.key === 'H') toggleHeat();
+  else if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) togglePause(); }
+});
+addEventListener('keyup', e => { if (e.code === 'Space') e.preventDefault(); });
+
+/* =========================================================
+ * 8. MAIN LOOP (fixed 60 Hz simulation, decoupled from display rate)
+ * ========================================================= */
+const hud = document.getElementById('hud'), TICK = 1000 / 60;
+let last = performance.now(), acc = 0, frames = 0, fpsT = last, fps = 0;
+
+function loop(now) {
+  acc = Math.min(acc + now - last, 100); last = now;
+  while (acc >= TICK) {
+    if (down) stamp(px, py);                           // keep spraying while the button is held
+    if (!paused) step();
+    acc -= TICK;
+  }
+  render();
+  frames++;
+  if (now - fpsT >= 500) {                             // telemetry refresh
+    fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now;
+    const cT = hover && px >= 0 && px < W && py >= 0 && py < H ? ` · ${Math.round(temp[py * W + px])}°C` : '';
+    hud.textContent = `FPS ${fps} · Particles ${count.toLocaleString()}${cT}`;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
